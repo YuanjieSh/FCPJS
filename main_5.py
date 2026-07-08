@@ -86,9 +86,20 @@ parser.add_argument('--splits', default=10, type=int, help='Number of experiment
 
 parser.add_argument("--sketch_method", default="ddsketch", type=str)
 parser.add_argument('--sigma',  default=0.1, type=float, help='STD for gaussian noise')
-parser.add_argument('--t',  default=0.1, type=float, help='temperature for weight')
-# parser.add_argument('--num_sketch', default=100, type=float, help='Number of global samples after sketch')
-parser.add_argument('--sketch_dimension', default=100, type=float, help='Number of global samples after sketch')
+parser.add_argument('--t',  default=0.001, type=float, help='temperature for weight')
+parser.add_argument('--num_sketch', default=512, type=int, help='Number of global samples after sketch')
+# ---------------- DP (Gaussian) + DP-hist reweighting params ----------------
+parser.add_argument('--dp_epsilon', default=1.0, type=float,help='Gaussian DP epsilon (set to enable DP). e.g., 1.0, 2.0, 5.0')
+parser.add_argument('--dp_delta', default=1e-5, type=float, help='Gaussian DP delta (set to enable DP). e.g., 1e-5')
+parser.add_argument('--dp_seed', default=33, type=int, help='Random seed for DP noise (for reproducibility). If None, uses nondeterministic RNG.')
+# ---------------- DP histogram / PDF construction params ----------------
+parser.add_argument('--pdf_bins', default=400, type=int,help='Number of bins for DP histogram over squashed scores in [0,1].')
+parser.add_argument('--pdf_eps_floor', default=1e-12, type=float,help='Numerical floor for pdf evaluation to avoid log(0).')
+
+# ---------------- Score squash-to-[0,1] params (avoid manual L,U) ----------------
+parser.add_argument('--squash_kind', default='atan', type=str, choices=['atan', 'sigmoid'], help='Monotone squash mapping from raw scores to (0,1).')
+parser.add_argument('--squash_s', default=1.0, type=float, help='Scale for squash mapping. Smaller -> more saturated near 0/1; larger -> smoother.')
+
 args = parser.parse_args()
 
 sys.path.insert(0, './')
@@ -136,9 +147,11 @@ def main():
 
     # client_loaders = load_federated_data(train_dataset, test_dataset, args.num_clients, iid, args.num_bins, args.batch_size)
     if args.method == 'FCP_full':
-        base_path = "dataset={}/method={}/iid={}/clients={}/rho={}/alpha={}/sketch_dimension={}/".format(args.dataset, args.method, args.use_iid, args.num_clients, args.rho, args.alpha, args.sketch_dimension)
+        base_path = "dataset={}/method={}/iid={}/clients={}/rho={}/alpha={}/".format(args.dataset, args.method, args.use_iid, args.num_clients, args.rho, args.alpha)
     elif args.method == 'FCP_LS': 
         base_path = "dataset={}/method={}/iid={}/clients={}/rho={}/alpha={}/sigma={}/".format(args.dataset, args.method, args.use_iid, args.num_clients, args.rho, args.alpha, args.sigma)
+    elif args.method == 'FCP_full_dp': 
+        base_path = "dataset={}/method={}/iid={}/clients={}/rho={}/alpha={}/sigma={}/".format(args.dataset, args.method, args.use_iid, args.num_clients, args.rho, args.alpha, args.dp_epsilon)
     elif args.method == 'FCP': 
         base_path = "dataset={}/method={}/iid={}/clients={}/rho={}/alpha={}/sketch_method={}/".format(args.dataset, args.method, args.use_iid, args.num_clients, args.rho, args.alpha, args.sketch_method)    
     else: 
@@ -146,9 +159,7 @@ def main():
     
     dataset_path = "client_data/dataset={}/iid={}/clients={}/rho={}/".format(args.dataset, args.use_iid, args.num_clients, args.rho)
     
-    # patha = 'Results_2/'+ base_path + 'client_data/'
-
-    patha = 'rebuttal/'+ base_path + 'client_data/'
+    patha = 'Results/'+ base_path + 'client_data/'
     
     if not os.path.exists(patha):
         os.makedirs(patha)
@@ -179,7 +190,7 @@ def main():
         global_test_scores = np.concatenate([client_scores[cid]['test'] for cid in client_scores])
         global_test_labels = np.concatenate([client_scores[cid]['test_labels'] for cid in client_scores])
 
-        args.num_sketch = global_calib_scores
+        # args.num_sketch = global_calib_scores
         
         # print(len(global_calib_scores))
 
@@ -188,37 +199,131 @@ def main():
         # weighted_scores_dict = weighted_scores_2(client_scores, global_calib_scores, args.method)
 
         if args.method == 'FCP_full':
+
+            if os.path.exists(result_csv):
+                os.remove(result_csv)
+
+            all_coverages = []
+            all_sizes = []
+
+            for target_cid in client_scores:
+                scores_dict, weights_dict = weighted_scores_accurate_2(client_scores, args, target_cid)
+
+                qhat, _ = compute_federated_global_quantile_3(scores_dict, weights_dict, args, key="calib", use_qr=False, w_x=1)
+
+                test_scores = np.concatenate([client_scores[target_cid]['test']])
+                test_labels = np.concatenate([client_scores[target_cid]['test_labels']])
+
+
+                (coverages, sizes) = global_conformal_2(test_scores, test_labels, qhat, client_id=target_cid, save_path=result_csv)
+
+                all_coverages.append(coverages)
+                all_sizes.append(sizes)
+
             
-            weighted_scores_dict, weights_dict = weighted_scores_accurate(client_scores, args)
+            # weighted_scores_dict, weights_dict = weighted_scores_accurate_2(client_scores, args)
 
-            # weighted_scores_ref = weighted_scores_4(client_scores, global_calib_scores, args)
+            # # weighted_scores_ref = weighted_scores_4(client_scores, global_calib_scores, args)
 
-            qhat, _ = compute_federated_global_quantile(weighted_scores_dict, args, return_loss_curve=False)
+            # # qhat, _ = compute_federated_global_quantile_2(weighted_scores_dict, weights_dict, args, return_loss_curve=False)
 
-            # qhat_ref, _ = compute_federated_global_quantile(weighted_scores_ref, args, return_loss_curve=False)
+            # qhat, _ = compute_federated_global_quantile_3(weighted_scores_dict, weights_dict, args,key="calib", use_qr=False, w_x=1)
+
+
+            # # qhat_ref, _ = compute_federated_global_quantile(weighted_scores_ref, args, return_loss_curve=False)
 
             # print(qhat)
 
             # print(qhat_ref)
 
-            (coverages, sizes) = global_conformal(global_test_scores, global_test_labels, qhat, client_scores, result_csv)
+            # (coverages, sizes) = global_conformal(global_test_scores, global_test_labels, qhat, client_scores, result_csv)
         
         elif args.method == 'FCP_LS':
-            weighted_scores_dict, q = weighted_scores_2(client_scores, args, args.method)
+            weighted_scores_dict, q_by_target = weighted_scores_2(client_scores, args, args.method)
 
-            (coverages, sizes) = global_conformal_per_class(global_test_scores, global_test_labels, q, client_scores, result_csv)
+            if os.path.exists(result_csv):
+                os.remove(result_csv)
+
+            all_coverages = []
+            all_sizes = []
+
+            for target_cid in client_scores:
+
+                test_scores = np.concatenate([client_scores[target_cid]['test']])
+                test_labels = np.concatenate([client_scores[target_cid]['test_labels']])
+
+                q = q_by_target[target_cid]
+
+                (coverages, sizes) = global_conformal_per_class_2(test_scores, test_labels, q, client_id=target_cid, save_path=result_csv)
+
+                all_coverages.append(coverages)
+                all_sizes.append(sizes)
+
+            # (coverages, sizes) = global_conformal_per_class(global_test_scores, global_test_labels, q, client_scores, result_csv)
 
         elif args.method == 'FCP':
 
             q_hat = distributed_quantile_from_scores(client_scores, args, args.sketch_method)
+
+            if os.path.exists(result_csv):
+                os.remove(result_csv)
+
+            all_coverages = []
+            all_sizes = []
+
+            for target_cid in client_scores:
+
+                test_scores = np.concatenate([client_scores[target_cid]['test']])
+                test_labels = np.concatenate([client_scores[target_cid]['test_labels']])
+
+                (coverages, sizes) = global_conformal_2(test_scores, test_labels, q_hat, client_id=target_cid, save_path=result_csv)
+
+                all_coverages.append(coverages)
+                all_sizes.append(sizes)
             
             # print(q_hat)
 
-            (coverages, sizes) = global_conformal(global_test_scores, global_test_labels, q_hat, client_scores, result_csv)
+            # (coverages, sizes) = global_conformal(global_test_scores, global_test_labels, q_hat, client_scores, result_csv)
+
+        elif args.method == 'FCP_full_dp':
+
+            if os.path.exists(result_csv):
+                os.remove(result_csv)
+
+            all_coverages = []
+            all_sizes = []
+
+            for target_cid in client_scores:
+                scores_dict, weights_dict = weighted_scores_accurate_2(client_scores, args, target_cid)
+
+                qhat, _ = compute_federated_global_quantile_3(scores_dict, weights_dict, args, key="calib", use_qr=False, w_x=1)
+
+                test_scores = np.concatenate([client_scores[target_cid]['test']])
+                test_labels = np.concatenate([client_scores[target_cid]['test_labels']])
+
+
+                (coverages, sizes) = global_conformal_2(test_scores, test_labels, qhat, client_id=target_cid, save_path=result_csv)
+
+                all_coverages.append(coverages)
+                all_sizes.append(sizes)
 
         else: 
 
             raise ValueError(f"Unsupported method: {args.method}")
+
+
+        coverages = np.concatenate(all_coverages)
+        sizes = np.concatenate(all_sizes)
+
+        global_row = pd.DataFrame([{
+            "client_id": "global",
+            "coverage": float(np.mean(coverages)),
+            "avg_set_size": float(np.mean(sizes)),
+        }])
+        if os.path.exists(result_csv):
+            global_row.to_csv(result_csv, mode="a", header=False, index=False)
+        else:
+            global_row.to_csv(result_csv, index=False)
 
 
         save_coverage = os.path.join(result_folder, f'seed={seed}_coverages.pkl')

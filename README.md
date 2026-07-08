@@ -24,36 +24,36 @@ Python dataset/iWild.py
 **FCPJS**
 # For IID
 ```
-python main_2.py --dataset rxrx1 --use_iid yes --num_clients 10 --splits 10 --method FCP_full --lr 0.0005 --t 0.01 --score HPS
-python main_2.py --dataset rxrx1 --use_iid yes --num_clients 10 --splits 10 --method FCP_full --lr 0.001 --t 1 --score APS
-python main_2.py --dataset rxrx1 --use_iid yes --num_clients 10 --splits 10 --method FCP_full --lr 0.01 --t 1 --score RAPS
+python main_5.py --dataset rxrx1 --use_iid yes --num_clients 50 --splits 10 --method FCP_full --score HPS
+python main_5.py --dataset rxrx1 --use_iid yes --num_clients 50 --splits 10 --method FCP_full --score APS
+python main_5.py --dataset rxrx1 --use_iid yes --num_clients 50 --splits 10 --method FCP_full --score RAPS
 ```
 # For non-IID
 ```
-python main_2.py --dataset rxrx1 --use_iid no --num_clients 10 --splits 10 --method FCP_full --lr 0.001 --rho 1.0 --t 0.001 --score HPS
-python main_2.py --dataset rxrx1 --use_iid no --num_clients 10 --splits 10 --method FCP_full --lr 0.005 --rho 1.0 --t 0.1 --score APS
-python main_2.py --dataset rxrx1 --use_iid no --num_clients 10 --splits 10 --method FCP_full --lr 0.01 --rho 1.0 --t 1.0 --score RAPS
+python main_5.py --dataset rxrx1 --use_iid no --num_clients 50 --splits 10 --method FCP_full --score HPS
+python main_5.py --dataset rxrx1 --use_iid no --num_clients 50 --splits 10 --method FCP_full --score APS
+python main_5.py --dataset rxrx1 --use_iid no --num_clients 50 --splits 10 --method FCP_full --score RAPS
 ```
 **FCP**
 # For IID
 ```
-python main_2.py --dataset rxrx1 --use_iid yes --num_clients 10 --splits 10 --method FCP --score HPS
+python main_5.py --dataset rxrx1 --use_iid yes --num_clients 50 --splits 10 --method FCP --score HPS
 ```
 # For non-IID
 ```
-python main_2.py --dataset rxrx1 --use_iid no --num_clients 10 --splits 10 --method FCP --rho 1.0 --score HPS
+python main_5.py --dataset rxrx1 --use_iid no --num_clients 50 --splits 10 --method FCP --rho 1.0 --score HPS
 ```
 **FCPLS**
 # For IID
 ```
-python main_2.py --dataset rxrx1 --use_iid yes --num_clients 10 --splits 10 --method FCP_LS --sigma 0.1 --score HPS
+python main_5.py --dataset rxrx1 --use_iid yes --num_clients 50 --splits 10 --method FCP_LS --sigma 0.1 --score HPS
 ```
 # For non-IID
 ```
-python main_2.py --dataset rxrx1 --use_iid no --num_clients 10 --splits 10 --method FCP_LS --sigma 0.1 --score HPS
+python main_5.py --dataset rxrx1 --use_iid no --num_clients 50 --splits 10 --method FCP_LS --sigma 0.1 --score HPS
 ```
 **FCPCS**
 # For IID
 ```
-python main_4.py --dataset rxrx1 --use_iid yes --num_clients 10 --splits 3
+python main_4.py --dataset rxrx1 --use_iid yes --num_clients 50 --splits 3
 ```
