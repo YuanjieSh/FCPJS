@@ -1,3 +1,28 @@
+## Valid and Efficient Uncertainty Quantification for Federated Joint Shift (FCPJS)
+
+This repository contains a implementation of **FCPJS**
+corresponding to the follow paper:
+
+Yuanjie Shi, Peihong Li, Xuanyu Cao, Yan Yan.
+*[Valid and Efficient Uncertainty Quantification for Federated Joint Shift](
+https://openreview.net/forum?id=PjKpx6VCov)*.
+UAI, 2026 .
+
+## Overview
+
+Reliable uncertainty quantification (UQ) is critical for safety-sensitive federated learning (FL) applications, such as cross-hospital diagnosis and global sensor networks.
+In FL, privacy constraints prevent centralized data pooling, while client data exhibit joint distribution shifts across covariates, labels, and conditionals.
+These shifts violate the exchangeability assumption required by conformal prediction (CP), which otherwise guarantees distribution-free coverage under i.i.d. data.
+To address this gap, we propose Federated Conformal Prediction for Joint Shift (\newCP), enabling valid CP under heterogeneous clients without sharing raw data.
+Specifically, the method operates in two stages:
+(i) the server constructs a privacy-preserving global sketch of nonconformity score distributions;
+(ii) each client performs importance-weighted calibration by contrasting its local scores with the global sketch.
+This distribution-ratio weighting corrects joint shifts in a unified manner.
+We prove that FCPJS attains valid marginal coverage across clients, up to an $O(\sqrt{\varepsilon_m}+1/\sqrt{n})$ error from the finite number of calibration samples $n$ and sketch size $m$.
+Experiments on four heterogeneous benchmarks show that \newCP\ preserves coverage and improves predictive efficiency by $12.64\%$ over the strongest baseline.
+To our knowledge, \newCP\ is the first method providing provably valid and efficient conformal UQ for FL under joint distribution shift.
+
+
 ## Running instructions
 
 Please run the commands mentioned below to produce results:
