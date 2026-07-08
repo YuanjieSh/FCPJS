@@ -326,7 +326,7 @@ def partition_non_iid_2(dataset, metadata, args):
     elif dataset == 'fmow': 
         client_indices = partition_fmow_disjoint_labels(metadata, args.num_clients, args.rho)
     elif dataset == 'amazon':
-        client_indices = partition_amazon_disjoint_labels(metadata, args.num_clients, args.rho)
+        client_indices = partition_amazon_joint_dirichlet(metadata, args.num_clients, args.rho)
     else:
         raise Exception('Undefined dataset')
 
@@ -416,82 +416,19 @@ def partition_rxrx1_by_experiment(metadata, num_clients, seed=42):
 
 #     return client_indices
 
-# def partition_rxrx1_disjoint_labels(metadata, num_clients, rho=0.3, seed=42, min_samples_per_class=10):
-#     """
-#     Construct a strong joint shift:
-#     - Client experiments are disjoint (P(X) shift)
-#     - Client labels are disjoint (P(Y) shift)
-#     - Within allowed labels, use Dirichlet distribution to control imbalance
-
-#     Args:
-#         metadata: DataFrame with 'experiment' and 'label'
-#         num_clients: number of clients
-#         rho: Dirichlet parameter for label imbalance
-#         seed: for reproducibility
-#         min_samples_per_class: min class samples per client to include
-
-#     Returns:
-#         dict[cid] -> list of sample indices
-#     """
-#     np.random.seed(seed)
-
-#     experiment_col = 'experiment'
-#     label_col = 'label'
-
-#     # Group by (experiment, label)
-#     group_dict = defaultdict(list)
-#     for i, (exp, y) in enumerate(zip(metadata[experiment_col], metadata[label_col])):
-#         group_dict[(exp, y)].append(i)
-
-#     # Assign experiments to clients
-#     experiment_to_indices = defaultdict(list)
-#     for (exp, y), idxs in group_dict.items():
-#         experiment_to_indices[exp].extend(idxs)
-
-#     experiments = list(experiment_to_indices.keys())
-#     np.random.shuffle(experiments)
-#     client_to_experiments = defaultdict(list)
-#     for i, exp in enumerate(experiments):
-#         cid = i % num_clients
-#         client_to_experiments[cid].append(exp)
-
-#     # Assign disjoint label subsets to clients
-#     all_labels = sorted(set(metadata[label_col]))
-#     num_classes = len(all_labels)
-#     labels_per_client = np.array_split(all_labels, num_clients)  # disjoint assignment
-
-#     client_indices = defaultdict(list)
-
-#     for cid in range(num_clients):
-#         allowed_labels = set(labels_per_client[cid])
-#         class_prop = np.random.dirichlet(alpha=np.ones(len(allowed_labels)) * rho)
-#         label_list = sorted(allowed_labels)
-
-#         for exp in client_to_experiments[cid]:
-#             for j, y in enumerate(label_list):
-#                 key = (exp, y)
-#                 if key not in group_dict:
-#                     continue
-#                 indices = group_dict[key]
-#                 np.random.shuffle(indices)
-#                 prop = class_prop[j]
-#                 count = max(int(round(prop * len(indices))), min_samples_per_class)
-#                 client_indices[cid].extend(indices[:count])
-
-#     # Optional: filter too-small clients
-#     client_indices = {cid: idxs for cid, idxs in client_indices.items() if len(idxs) >= 4}
-
-#     return client_indices
-
-def partition_rxrx1_disjoint_labels(
-    metadata, num_clients, rho=0.3, seed=42, min_samples_per_class=10
-):
+def partition_rxrx1_disjoint_labels(metadata, num_clients, rho=0.3, seed=42, min_samples_per_class=10):
     """
-    强 joint shift 构造（带实验复用回退）:
-      - 优先：实验互斥 + 标签互斥
-      - 若 num_clients > #experiments：允许实验复用（同一 experiment 可分配给多个 client）
-      - 在允许的标签内用 Dirichlet 控制不均衡
-      - 分配索引时为每个 (exp, y) 维护“剩余池”，避免样本重复分配
+    Construct a strong joint shift:
+    - Client experiments are disjoint (P(X) shift)
+    - Client labels are disjoint (P(Y) shift)
+    - Within allowed labels, use Dirichlet distribution to control imbalance
+
+    Args:
+        metadata: DataFrame with 'experiment' and 'label'
+        num_clients: number of clients
+        rho: Dirichlet parameter for label imbalance
+        seed: for reproducibility
+        min_samples_per_class: min class samples per client to include
 
     Returns:
         dict[cid] -> list of sample indices
@@ -501,96 +438,47 @@ def partition_rxrx1_disjoint_labels(
     experiment_col = 'experiment'
     label_col = 'label'
 
-    # 1) 先把 (exp, y) -> indices 建好，并为每个 key 建一个“剩余池”
+    # Group by (experiment, label)
     group_dict = defaultdict(list)
     for i, (exp, y) in enumerate(zip(metadata[experiment_col], metadata[label_col])):
         group_dict[(exp, y)].append(i)
 
-    # 为每个 (exp, y) 随机打乱，准备一个“剩余池”
-    remaining = {}
-    for key, idxs in group_dict.items():
-        idxs = idxs.copy()
-        np.random.shuffle(idxs)
-        remaining[key] = idxs  # 之后分配时从这里 pop
-
-    # 2) 构建 experiment -> 全部索引（仅用于统计/分片；真正分配在 (exp,y) 层面）
+    # Assign experiments to clients
     experiment_to_indices = defaultdict(list)
     for (exp, y), idxs in group_dict.items():
         experiment_to_indices[exp].extend(idxs)
 
     experiments = list(experiment_to_indices.keys())
     np.random.shuffle(experiments)
-
-    # 3) 分配实验到客户端：
-    #    - 常规：experiments 轮转分配到 num_clients（无复用）
-    #    - 复用：当 num_clients > len(experiments) 时，让每个 client 至少拿到一个，
-    #            通过循环 experiments 进行分配（允许同一 experiment 多个 client 共享）
     client_to_experiments = defaultdict(list)
-    E = len(experiments)
-    if E == 0:
-        # 没有实验，直接返回空
-        return {cid: [] for cid in range(num_clients)}
+    for i, exp in enumerate(experiments):
+        cid = i % num_clients
+        client_to_experiments[cid].append(exp)
 
-    if num_clients <= E:
-        # 原逻辑：对 experiments 做 round-robin 到 clients
-        for i, exp in enumerate(experiments):
-            cid = i % num_clients
-            client_to_experiments[cid].append(exp)
-    else:
-        # 允许实验复用：确保每个 client 至少拿到 1 个实验
-        for cid in range(num_clients):
-            exp = experiments[cid % E]
-            client_to_experiments[cid].append(exp)
-        # 如果你希望更多实验分配（例如平均一些多余的实验），也可以继续循环分配：
-        # extra = max(0, E - num_clients)
-        # for k in range(extra):
-        #     cid = k % num_clients
-        #     exp = experiments[(num_clients + k) % E]
-        #     client_to_experiments[cid].append(exp)
-
-    # 4) 标签互斥：按客户端把 label 划分成 disjoint subsets
+    # Assign disjoint label subsets to clients
     all_labels = sorted(set(metadata[label_col]))
     num_classes = len(all_labels)
     labels_per_client = np.array_split(all_labels, num_clients)  # disjoint assignment
 
-    # 5) 实际分配索引：对每个 client 的每个 experiment、每个允许的 label，
-    #    从 remaining[(exp, y)] 里“取走”一段（不重复）
     client_indices = defaultdict(list)
 
     for cid in range(num_clients):
-        allowed_labels = list(labels_per_client[cid])
-        if len(allowed_labels) == 0:
-            continue
-
-        # Dirichlet 比例
+        allowed_labels = set(labels_per_client[cid])
         class_prop = np.random.dirichlet(alpha=np.ones(len(allowed_labels)) * rho)
-
-        # 避免 j 对不上，固定 label 顺序
         label_list = sorted(allowed_labels)
 
         for exp in client_to_experiments[cid]:
             for j, y in enumerate(label_list):
                 key = (exp, y)
-                if key not in remaining:
+                if key not in group_dict:
                     continue
-                pool = remaining[key]
-                if not pool:
-                    continue
+                indices = group_dict[key]
+                np.random.shuffle(indices)
+                prop = class_prop[j]
+                count = max(int(round(prop * len(indices))), min_samples_per_class)
+                client_indices[cid].extend(indices[:count])
 
-                # 期望数量：按该 label 的 Dirichlet 比例决定
-                # 同时保证下限/上限（不能超过剩余池大小）
-                want = max(int(round(class_prop[j] * len(pool))), min_samples_per_class)
-                take = min(want, len(pool))
-                if take <= 0:
-                    continue
-
-                # 从剩余池“弹出” take 个，避免重复分配
-                take_idxs = pool[:take]
-                remaining[key] = pool[take:]  # 更新池
-
-                client_indices[cid].extend(take_idxs)
-
-    # 6) 可选：过滤过小客户端（按需）
+    # Optional: filter too-small clients
     client_indices = {cid: idxs for cid, idxs in client_indices.items() if len(idxs) >= 4}
 
     return client_indices
@@ -784,132 +672,46 @@ def partition_amazon_by_domain(metadata, num_clients):
 
     return client_indices
 
-# def partition_amazon_disjoint_labels(metadata, num_clients, rho=0.3, seed=42, min_samples_per_class=10):
-#     """
-#     Partition Amazon clients by domain with disjoint labels and Dirichlet-controlled imbalance.
-#     """
-
-#     np.random.seed(seed)
-#     domain_col = 'category'
-#     label_col = 'label'
-
-#     group_dict = defaultdict(list)
-#     for i, (d, y) in enumerate(zip(metadata[domain_col], metadata[label_col])):
-#         group_dict[(d, y)].append(i)
-
-#     domains = sorted(set(metadata[domain_col]))
-#     np.random.shuffle(domains)
-#     client_to_domains = defaultdict(list)
-#     for i, d in enumerate(domains):
-#         cid = i % num_clients
-#         client_to_domains[cid].append(d)
-
-#     all_labels = sorted(set(metadata[label_col]))
-#     labels_per_client = np.array_split(all_labels, num_clients)
-
-#     client_indices = defaultdict(list)
-#     for cid in range(num_clients):
-#         allowed_labels = set(labels_per_client[cid])
-#         class_prop = np.random.dirichlet(alpha=np.ones(len(allowed_labels)) * rho)
-#         label_list = sorted(allowed_labels)
-
-#         for d in client_to_domains[cid]:
-#             for j, y in enumerate(label_list):
-#                 key = (d, y)
-#                 if key not in group_dict:
-#                     continue
-#                 indices = group_dict[key]
-#                 np.random.shuffle(indices)
-#                 count = max(int(round(class_prop[j] * len(indices))), min_samples_per_class)
-#                 client_indices[cid].extend(indices[:count])
-
-#     return dict(client_indices)
-
-
-def partition_amazon_disjoint_labels(
-    metadata, num_clients, rho=0.3, seed=42, min_samples_per_class=10
-):
+def partition_amazon_disjoint_labels(metadata, num_clients, rho=0.3, seed=42, min_samples_per_class=10):
     """
-    Partition Amazon by domain with disjoint labels + Dirichlet imbalance.
-    当 num_clients > #domains 时，允许 domain 复用（同一 domain 可分配给多个 client），
-    并对每个 (domain, label) 维护“剩余池”以避免样本重复。
+    Partition Amazon clients by domain with disjoint labels and Dirichlet-controlled imbalance.
     """
+
     np.random.seed(seed)
     domain_col = 'category'
-    label_col  = 'label'
+    label_col = 'label'
 
-    # (domain, label) -> 全部样本索引
     group_dict = defaultdict(list)
     for i, (d, y) in enumerate(zip(metadata[domain_col], metadata[label_col])):
         group_dict[(d, y)].append(i)
 
-    # 为每个 (domain, label) 建立“剩余池”，打乱以便连续弹出不重复
-    remaining = {}
-    for key, idxs in group_dict.items():
-        buf = idxs.copy()
-        np.random.shuffle(buf)
-        remaining[key] = buf
-
-    # domain 列表
     domains = sorted(set(metadata[domain_col]))
     np.random.shuffle(domains)
-    D = len(domains)
-    if D == 0:
-        return {cid: [] for cid in range(num_clients)}
-
-    # 将 domain 分配给 clients：num_clients <= D 时保持轮转；否则启用复用
     client_to_domains = defaultdict(list)
-    if num_clients <= D:
-        # 经典轮转：每个 domain 只出现一次
-        for i, d in enumerate(domains):
-            cid = i % num_clients
-            client_to_domains[cid].append(d)
-    else:
-        # 复用：让每个 client 至少拿到一个 domain（近似均匀）
-        reps = math.ceil(num_clients / D)
-        cid = 0
-        for _ in range(reps):
-            for d in domains:
-                if cid >= num_clients:
-                    break
-                client_to_domains[cid].append(d)
-                cid += 1
-        # 如需让每个 client 拿到多个 domain，可在此继续循环 domains 追加分配
+    for i, d in enumerate(domains):
+        cid = i % num_clients
+        client_to_domains[cid].append(d)
 
-    # 标签互斥：把所有标签 disjoint 切给不同 client
     all_labels = sorted(set(metadata[label_col]))
     labels_per_client = np.array_split(all_labels, num_clients)
 
-    # 实际分配样本：对每个 client 的每个 domain、其允许的 label，
-    # 从 remaining[(domain,label)] 的“池”里弹出，不会与其他 client 重复
     client_indices = defaultdict(list)
     for cid in range(num_clients):
-        allowed_labels = list(labels_per_client[cid])
-        if len(allowed_labels) == 0:
-            continue
-
-        # Dirichlet 控制该 client 内部各 label 的比例
+        allowed_labels = set(labels_per_client[cid])
         class_prop = np.random.dirichlet(alpha=np.ones(len(allowed_labels)) * rho)
-        label_list = sorted(allowed_labels)  # 固定顺序以匹配 class_prop 的下标
+        label_list = sorted(allowed_labels)
 
         for d in client_to_domains[cid]:
             for j, y in enumerate(label_list):
                 key = (d, y)
-                pool = remaining.get(key, [])
-                if not pool:
+                if key not in group_dict:
                     continue
-                want = max(int(round(class_prop[j] * len(pool))), min_samples_per_class)
-                take = min(want, len(pool))
-                if take <= 0:
-                    continue
-                take_idxs = pool[:take]
-                remaining[key] = pool[take:]  # 更新剩余池
-                client_indices[cid].extend(take_idxs)
+                indices = group_dict[key]
+                np.random.shuffle(indices)
+                count = max(int(round(class_prop[j] * len(indices))), min_samples_per_class)
+                client_indices[cid].extend(indices[:count])
 
-    # 可选：过滤过小客户端
-    client_indices = {cid: idxs for cid, idxs in client_indices.items() if len(idxs) >= 4}
-    return client_indices
-
+    return dict(client_indices)
 
 def partition_amazon_joint_dirichlet(metadata, num_clients, rho=0.3, seed=42, min_samples=10):
     """
@@ -2574,7 +2376,7 @@ def compute_federated_global_quantile_2(client_scores_dict, weight_dict, args, r
 
         # diff = v_all - qhat
         # loss = torch.mean((args.alpha - (diff < 0).float()) * diff)
-        loss = torch.mean(torch.where(V >= qhat, (1 - args.alpha) * (V - qhat), args.alpha * (qhat - V)) * W)
+        loss = loss = torch.mean(torch.where(V >= qhat, (1 - args.alpha) * (V - qhat), args.alpha * (qhat - V)) * W)
 
         loss.backward()
         optimizer.step()
@@ -2822,15 +2624,14 @@ def global_conformal(val_scores_all, val_labels, qhat, client_scores=None, save_
 
 #     return global_calib_scores
 
-def compress_scores(scores, sketch_dimension=100):
-    td = TDigest(delta=sketch_dimension)
+def compress_scores(scores):
+    td = TDigest()
     for s in scores:
         td.update(s)
     return {'type': 'tdigest', 'sketch': td}
 
-def merge_tdigests(td_list, sketch_dimension=100):
-    # num_sketch = _ensure_scalar_int(num_sketch) 
-    merged = TDigest(delta=sketch_dimension)
+def merge_tdigests(td_list):
+    merged = TDigest()
     for td in td_list:
         for item in td.centroids_to_list():
             m = float(item['m'])
@@ -2838,10 +2639,9 @@ def merge_tdigests(td_list, sketch_dimension=100):
             merged.update(m, c)
     return merged
 
-def aggregate_sketches(sketches, sketch_dimension=100):
-    # num_sketch = _ensure_scalar_int(num_sketch) 
+def aggregate_sketches(sketches):
     td_list = [s['sketch'] for s in sketches]
-    return {'type': 'tdigest', 'sketch': merge_tdigests(td_list, sketch_dimension)}
+    return {'type': 'tdigest', 'sketch': merge_tdigests(td_list)}
 
 def construct_global_cdf_from_tdigest(sketch):
     centroids = sketch['sketch'].centroids_to_list()
@@ -2856,14 +2656,13 @@ def construct_global_cdf_from_tdigest(sketch):
     cum_weights /= cum_weights[-1]
     return interp1d(values, cum_weights, kind='linear', bounds_error=False, fill_value=(0.0, 1.0))
 
-def federated_sketching(client_scores_dict, sketch_dimension=100):
-    # num_sketch = _ensure_scalar_int(num_sketch) 
+def federated_sketching(client_scores_dict):
     sketches = []
     for cid in client_scores_dict:
         local_scores = np.array(client_scores_dict[cid]['calib'])
-        sketch = compress_scores(local_scores, sketch_dimension=sketch_dimension)
+        sketch = compress_scores(local_scores)
         sketches.append(sketch)
-    return aggregate_sketches(sketches, sketch_dimension=sketch_dimension)
+    return aggregate_sketches(sketches)
 
 def estimate_empirical_likelihood_ratios_3(client_scores_dict, global_cdf_fn, t, min_cdf=1e-6):
     client_weights = {}
@@ -2882,7 +2681,7 @@ def estimate_empirical_likelihood_ratios_3(client_scores_dict, global_cdf_fn, t,
 
 def weighted_scores_accurate(client_scores_dict, args):
     key = 'calib'
-    aggregated_sketch = federated_sketching(client_scores_dict, sketch_dimension=args.sketch_dimension)
+    aggregated_sketch = federated_sketching(client_scores_dict)
     global_cdf_fn = construct_global_cdf_from_tdigest(aggregated_sketch)
     likelihood_ratios = estimate_empirical_likelihood_ratios_3(client_scores_dict, global_cdf_fn, args.t)
 
