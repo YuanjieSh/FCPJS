@@ -44,6 +44,10 @@ Python dataset/FMoW.py
 ```
 Python dataset/iWild.py 
 ```
+**Amazon Reviews**
+```
+Python dataset/amazon.py
+```
   
 ## Calibration commands
 **FCPJS**
